@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>축구 시뮬레이션</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Press Start 2P', cursive;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background-color: #22c55e; /* Tailwind green-600 */
+            color: white;
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #16a34a; /* Tailwind green-700 */
+            border: 5px solid white;
+            display: block;
+            max-width: 90%;
+            aspect-ratio: 2 / 1;
+            height: auto;
+            border-radius: 0.5rem; /* rounded-lg */
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.15);
+        }
+        .controls, .scoreboard {
+            margin-top: 20px;
+            text-align: center;
+        }
+        button {
+            font-family: 'Press Start 2P', cursive;
+            background-color: #f97316; /* Tailwind orange-500 */
+            color: white;
+            border: 2px solid white;
+            padding: 10px 20px;
+            border-radius: 0.5rem; /* rounded-lg */
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #ea580c; /* Tailwind orange-600 */
+        }
+        #message-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px 40px;
+            border-radius: 10px;
+            font-size: 2em;
+            display: none;
+            z-index: 100;
+            text-align: center;
+        }
+        .instructions {
+            margin-top: 15px;
+            font-size: 0.7em;
+            text-align: center;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body class="bg-green-600 flex flex-col items-center justify-center min-h-screen text-white p-4">
+
+    <h1 class="text-3xl mb-4">축구 시뮬레이션</h1>
+
+    <div id="scoreboard" class="scoreboard text-2xl mb-4">
+        <span id="team1-score">0</span> - <span id="team2-score">0</span>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div class="instructions">
+        <p>플레이어 1: 방향키 - 파란색 첫번째 선수</p>
+        <p>플레이어 2: WASD - 파란색 두번째 선수</p>
+    </div>
+
+    <div class="controls mt-4">
+        <button id="startButton">시작</button>
+        <button id="resetButton">리셋</button>
+    </div>
+
+    <div id="message-box">골!</div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const team1ScoreElem = document.getElementById('team1-score');
+        const team2ScoreElem = document.getElementById('team2-score');
+        const startButton = document.getElementById('startButton');
+        const resetButton = document.getElementById('resetButton');
+        const messageBox = document.getElementById('message-box');
+
+        let animationFrameId;
+        let gameRunning = false;
+
+        let fieldWidth, fieldHeight;
+        let playerRadius, ballRadius;
+        let goalWidth, goalHeight;
+        let team1GoalX, team2GoalX, goalY;
+
+        let ball = { x: 0, y: 0, vx: 0, vy: 0 };
+        let team1Players = [];
+        let team2Players = [];
+        let team1Score = 0;
+        let team2Score = 0;
+        const playerSpeed = 3;
+        const aiSpeed = 1.5;
+        const ballSpeedFactor = 5;
+        const friction = 0.98;
+
+        // 수정: 키 이름 일관성 유지
+        const keys = {
+            arrowup: false,
+            arrowdown: false,
+            arrowleft: false,
+            arrowright: false,
+            w: false,
+            a: false,
+            s: false,
+            d: false
+        };
+
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            const maxWidth = container.clientWidth * 0.9;
+            const aspectRatio = 2 / 1;
+            const maxHeight = window.innerHeight * 0.6;
+
+            let targetWidth = maxWidth;
+            let targetHeight = maxWidth / aspectRatio;
+
+            if (targetHeight > maxHeight) {
+                 targetHeight = maxHeight;
+                 targetWidth = maxHeight * aspectRatio;
+            }
+
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+
+            fieldWidth = canvas.width;
+            fieldHeight = canvas.height;
+            playerRadius = fieldHeight * 0.04;
+            ballRadius = fieldHeight * 0.02;
+            goalWidth = Math.max(10, fieldWidth * 0.03); // 골대 최소 너비 보장
+            goalHeight = fieldHeight * 0.3;
+
+            team1GoalX = 0;
+            team2GoalX = fieldWidth - goalWidth;
+            goalY = (fieldHeight - goalHeight) / 2;
+
+            // 리사이즈 시 플레이어 위치가 캔버스 밖으로 나가지 않도록 조정
+            [...team1Players, ...team2Players].forEach(p => {
+                p.x = Math.max(playerRadius, Math.min(fieldWidth - playerRadius, p.x));
+                p.y = Math.max(playerRadius, Math.min(fieldHeight - playerRadius, p.y));
+            });
+            // 공 위치도 조정
+             ball.x = Math.max(ballRadius, Math.min(fieldWidth - ballRadius, ball.x));
+             ball.y = Math.max(ballRadius, Math.min(fieldHeight - ballRadius, ball.y));
+        }
+
+        function resetGameElements() {
+            ball = {
+                x: fieldWidth / 2,
+                y: fieldHeight / 2,
+                vx: (Math.random() > 0.5 ? 1 : -1) * (Math.random() * 1 + 0.5),
+                vy: (Math.random() > 0.5 ? 1 : -1) * (Math.random() * 1 + 0.5)
+            };
+            team1Players = [
+                { x: fieldWidth * 0.25, y: fieldHeight * 0.3 },
+                { x: fieldWidth * 0.25, y: fieldHeight * 0.7 },
+            ];
+            team2Players = [
+                { x: fieldWidth * 0.75, y: fieldHeight * 0.3 },
+                { x: fieldWidth * 0.75, y: fieldHeight * 0.7 },
+            ];
+        }
+
+        function initGame() {
+            resizeCanvas();
+            team1Score = 0;
+            team2Score = 0;
+            updateScoreboard();
+            resetGameElements();
+            draw();
+        }
+
+        function updateScoreboard() {
+            team1ScoreElem.textContent = team1Score;
+            team2ScoreElem.textContent = team2Score;
+        }
+
+        function showMessage(msg, duration = 1500) {
+            messageBox.textContent = msg;
+            messageBox.style.display = 'block';
+            setTimeout(() => {
+                messageBox.style.display = 'none';
+            }, duration);
+        }
+
+        function drawField() {
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, fieldWidth, fieldHeight);
+            ctx.beginPath();
+            ctx.moveTo(fieldWidth / 2, 0);
+            ctx.lineTo(fieldWidth / 2, fieldHeight);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(fieldWidth / 2, fieldHeight / 2, fieldHeight * 0.15, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.strokeRect(team1GoalX, goalY, goalWidth, goalHeight);
+            ctx.strokeRect(team2GoalX, goalY, goalWidth, goalHeight);
+            const penaltyAreaWidth = fieldWidth * 0.18;
+            const penaltyAreaHeight = fieldHeight * 0.4;
+            ctx.strokeRect(0, (fieldHeight - penaltyAreaHeight) / 2, penaltyAreaWidth, penaltyAreaHeight);
+            ctx.strokeRect(fieldWidth - penaltyAreaWidth, (fieldHeight - penaltyAreaHeight) / 2, penaltyAreaWidth, penaltyAreaHeight);
+        }
+
+        function drawCircle(x, y, radius, color) {
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawPlayers() {
+            team1Players.forEach((player, index) => {
+                // 플레이어 번호 표시
+                drawCircle(player.x, player.y, playerRadius, '#3b82f6'); // blue-500
+                ctx.fillStyle = 'white';
+                ctx.font = `${playerRadius}px 'Press Start 2P', cursive`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(`${index + 1}`, player.x, player.y);
+            });
+            
+            team2Players.forEach(player => {
+                drawCircle(player.x, player.y, playerRadius, '#ef4444'); // red-500
+            });
+        }
+
+        function drawBall() {
+            drawCircle(ball.x, ball.y, ballRadius, 'white');
+        }
+
+        function movePlayer() {
+            // 디버깅용 콘솔 로그 (필요시 주석 해제)
+            // console.log(JSON.stringify(keys));
+
+            const player1 = team1Players[0];
+            if (player1) {
+                let dx1 = 0;
+                let dy1 = 0;
+                if (keys.arrowup) dy1 -= 1;
+                if (keys.arrowdown) dy1 += 1;
+                if (keys.arrowleft) dx1 -= 1;
+                if (keys.arrowright) dx1 += 1;
+
+                // 대각선 이동 속도 보정
+                const dist1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+                if (dist1 > 0) {
+                    player1.x += (dx1 / dist1) * playerSpeed;
+                    player1.y += (dy1 / dist1) * playerSpeed;
+                }
+
+                // 경계 체크
+                player1.x = Math.max(playerRadius, Math.min(fieldWidth - playerRadius, player1.x));
+                player1.y = Math.max(playerRadius, Math.min(fieldHeight - playerRadius, player1.y));
+            }
+
+            const player2 = team1Players[1];
+            if (player2) {
+                let dx2 = 0;
+                let dy2 = 0;
+                if (keys.w) dy2 -= 1;
+                if (keys.s) dy2 += 1;
+                if (keys.a) dx2 -= 1;
+                if (keys.d) dx2 += 1;
+
+                // 대각선 이동 속도 보정
+                const dist2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+                if (dist2 > 0) {
+                    player2.x += (dx2 / dist2) * playerSpeed;
+                    player2.y += (dy2 / dist2) * playerSpeed;
+                }
+
+                // 경계 체크
+                player2.x = Math.max(playerRadius, Math.min(fieldWidth - playerRadius, player2.x));
+                player2.y = Math.max(playerRadius, Math.min(fieldHeight - playerRadius, player2.y));
+            }
+        }
+
+        function moveAI() {
+            // AI 팀의 역할 부여 (첫 번째 선수: 수비수, 두 번째 선수: 공격수)
+            const defender = team2Players[0];
+            const attacker = team2Players[1];
+            
+            // 공의 위치가 필드의 어느 쪽에 있는지 확인 (중앙 기준)
+            const ballInTeam1Half = ball.x < fieldWidth / 2;
+            
+            // 목표 지점 (기본값)
+            let defenderTargetX, defenderTargetY;
+            let attackerTargetX, attackerTargetY;
+            
+            // 공격수 AI
+            if (ballInTeam1Half) {
+                // 공이 상대 진영에 있을 때 - 공격 태세
+                // 공을 향해 직접 달려감 (조금 더 빠른 속도로)
+                const dx = ball.x - attacker.x;
+                const dy = ball.y - attacker.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                if (dist > playerRadius + ballRadius) {
+                    // 공격수는 더 빠르게 움직임 (1.2배)
+                    attacker.x += (dx / dist) * (aiSpeed * 1.2);
+                    attacker.y += (dy / dist) * (aiSpeed * 1.2);
+                }
+            } else {
+                // 공이 자기 진영에 있을 때
+                // 공을 향해 이동하되, 골대 방향으로 약간 더 위치
+                attackerTargetX = ball.x;
+                // 공을 좀 더 공격적으로 가로채려고 시도
+                attackerTargetY = ball.y + (team1GoalX < team2GoalX ? -20 : 20);
+                
+                // 목표 지점으로 이동
+                const dx = attackerTargetX - attacker.x;
+                const dy = attackerTargetY - attacker.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                if (dist > 5) { // 최소 이동 거리
+                    attacker.x += (dx / dist) * aiSpeed;
+                    attacker.y += (dy / dist) * aiSpeed;
+                }
+            }
+            
+            // 수비수 AI
+            if (!ballInTeam1Half) {
+                // 공이 자기 진영에 있을 때 - 수비 태세
+                const goalCenterX = team2GoalX;
+                const goalCenterY = goalY + (goalHeight / 2);
+                
+                // 공과 골대 사이의 위치 계산 (공과 골대 사이의 70% 지점)
+                defenderTargetX = ball.x + (goalCenterX - ball.x) * 0.7;
+                defenderTargetY = ball.y + (goalCenterY - ball.y) * 0.7;
+                
+                // 공이 너무 가까우면 직접 공을 향해 이동
+                const distToBall = Math.sqrt(
+                    Math.pow(ball.x - defender.x, 2) + 
+                    Math.pow(ball.y - defender.y, 2)
+                );
+                
+                if (distToBall < fieldWidth * 0.2) {
+                    // 공이 가까우면 공을 직접 노림
+                    defenderTargetX = ball.x;
+                    defenderTargetY = ball.y;
+                }
+            } else {
+                // 공이 상대 진영에 있을 때 - 중앙에서 대기
+                defenderTargetX = fieldWidth * 0.75; // 자기 진영 쪽으로
+                
+                // 공의 y위치에 따라 수비 위치 조정 (공을 추적)
+                defenderTargetY = Math.min(
+                    Math.max(fieldHeight * 0.2, ball.y),
+                    fieldHeight * 0.8
+                );
+            }
+            
+            // 수비수 이동 계산
+            const defDx = defenderTargetX - defender.x;
+            const defDy = defenderTargetY - defender.y;
+            const defDist = Math.sqrt(defDx * defDx + defDy * defDy);
+            
+            if (defDist > 5) { // 최소 이동 거리
+                // 예측 이동 - 공의 속도 벡터를 고려해 약간 앞서 이동
+                const predictFactor = 0.3; // 예측 정도 (0.3 = 30%)
+                const predictX = defDx + ball.vx * predictFactor;
+                const predictY = defDy + ball.vy * predictFactor;
+                const predictDist = Math.sqrt(predictX * predictX + predictY * predictY);
+                
+                if (predictDist > 0) {
+                    defender.x += (predictX / predictDist) * aiSpeed;
+                    defender.y += (predictY / predictDist) * aiSpeed;
+                }
+            }
+            
+            // 경계 체크
+            team2Players.forEach(aiPlayer => {
+                aiPlayer.x = Math.max(playerRadius, Math.min(fieldWidth - playerRadius, aiPlayer.x));
+                aiPlayer.y = Math.max(playerRadius, Math.min(fieldHeight - playerRadius, aiPlayer.y));
+            });
+            
+            // 디버그 시각화 (선택적으로 주석 해제)
+            // drawLine(defender.x, defender.y, defenderTargetX, defenderTargetY, 'rgba(255,0,0,0.5)');
+            // drawLine(attacker.x, attacker.y, attackerTargetX, attackerTargetY, 'rgba(255,0,0,0.5)');
+        }
+        
+        // 디버그 용 보조 함수
+        function drawLine(x1, y1, x2, y2, color) {
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.strokeStyle = color;
+            ctx.stroke();
+        }
+
+        function moveBall() {
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+            ball.vx *= friction;
+            ball.vy *= friction;
+
+            if (Math.abs(ball.vx) < 0.1) ball.vx = 0; // 속도가 매우 느리면 멈춤
+            if (Math.abs(ball.vy) < 0.1) ball.vy = 0;
+            
+            // 모서리 감지 (공 반지름보다 약간 큰 값으로 모서리 영역 정의)
+            const cornerThreshold = ballRadius * 1.5;
+            const isInLeftCorner = ball.x <= cornerThreshold;
+            const isInRightCorner = ball.x >= fieldWidth - cornerThreshold;
+            const isInTopCorner = ball.y <= cornerThreshold;
+            const isInBottomCorner = ball.y >= fieldHeight - cornerThreshold;
+            
+            // 모서리에 박혔는지 확인 (왼쪽/오른쪽 + 위/아래)
+            if ((isInLeftCorner || isInRightCorner) && (isInTopCorner || isInBottomCorner)) {
+                // 모서리에 박힌 경우 중앙으로 이동 및 메시지 표시
+                showMessage("모서리 리셋!", 1000);
+                ball.x = fieldWidth / 2;
+                ball.y = fieldHeight / 2;
+                // 랜덤 방향으로 약한 속도 부여
+                ball.vx = (Math.random() > 0.5 ? 1 : -1) * (Math.random() * 0.5 + 0.2);
+                ball.vy = (Math.random() > 0.5 ? 1 : -1) * (Math.random() * 0.5 + 0.2);
+                return; // 더 이상 처리하지 않음
+            }
+
+            if (ball.x - ballRadius < 0 || ball.x + ballRadius > fieldWidth) {
+                if (ball.y > goalY && ball.y < goalY + goalHeight) {
+                   if (ball.x - ballRadius < 0) {
+                       team2Score++;
+                       showMessage("팀 2 득점!");
+                       resetGameElements();
+                   } else {
+                       team1Score++;
+                       showMessage("팀 1 득점!");
+                       resetGameElements();
+                   }
+                   updateScoreboard();
+                } else {
+                    ball.vx *= -0.8; // 벽에 부딪힐 때 속도 약간 감소
+                    ball.x = (ball.x - ballRadius <= 0) ? ballRadius : fieldWidth - ballRadius;
+                }
+            }
+            if (ball.y - ballRadius < 0 || ball.y + ballRadius > fieldHeight) {
+                ball.vy *= -0.8; // 벽에 부딪힐 때 속도 약간 감소
+                ball.y = (ball.y - ballRadius <= 0) ? ballRadius : fieldHeight - ballRadius;
+            }
+        }
+
+        function checkCollisions() {
+            const allPlayers = [...team1Players, ...team2Players];
+
+            allPlayers.forEach(player => {
+                const dx = ball.x - player.x;
+                const dy = ball.y - player.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                const minDistance = playerRadius + ballRadius;
+
+                if (distance < minDistance) {
+                    const overlap = minDistance - distance;
+                    const angle = Math.atan2(dy, dx);
+                    const moveX = Math.cos(angle) * overlap;
+                    const moveY = Math.sin(angle) * overlap;
+
+                    // 공 위치 보정 (플레이어 밖으로)
+                    ball.x += moveX;
+                    ball.y += moveY;
+
+                    // 공 속도 변경 (플레이어 -> 공 방향으로 힘 전달)
+                    const kickStrength = ballSpeedFactor;
+                    ball.vx = Math.cos(angle) * kickStrength;
+                    ball.vy = Math.sin(angle) * kickStrength;
+                }
+            });
+
+            for (let i = 0; i < allPlayers.length; i++) {
+                for (let j = i + 1; j < allPlayers.length; j++) {
+                    const p1 = allPlayers[i];
+                    const p2 = allPlayers[j];
+                    const dx = p2.x - p1.x;
+                    const dy = p2.y - p1.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const minDistance = playerRadius * 2;
+
+                    if (distance < minDistance && distance > 0) { // 거리가 0인 경우 방지
+                        const overlap = (minDistance - distance) / 2;
+                        const angle = Math.atan2(dy, dx);
+                        const moveX = Math.cos(angle) * overlap;
+                        const moveY = Math.sin(angle) * overlap;
+
+                        p1.x -= moveX;
+                        p1.y -= moveY;
+                        p2.x += moveX;
+                        p2.y += moveY;
+
+                        p1.x = Math.max(playerRadius, Math.min(fieldWidth - playerRadius, p1.x));
+                        p1.y = Math.max(playerRadius, Math.min(fieldHeight - playerRadius, p1.y));
+                        p2.x = Math.max(playerRadius, Math.min(fieldWidth - playerRadius, p2.x));
+                        p2.y = Math.max(playerRadius, Math.min(fieldHeight - playerRadius, p2.y));
+                    }
+                }
+            }
+        }
+
+        function gameLoop() {
+            if (!gameRunning) return;
+            movePlayer();
+            moveAI();
+            moveBall();
+            checkCollisions();
+            draw();
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, fieldWidth, fieldHeight);
+            drawField();
+            drawPlayers();
+            drawBall();
+        }
+
+        // 수정: 키 이벤트 처리 개선
+        window.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            if (key in keys) {
+                keys[key] = true;
+                e.preventDefault(); // 방향키나 WASD 입력 시 스크롤 방지
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            if (key in keys) {
+                keys[key] = false;
+            }
+        });
+
+        startButton.addEventListener('click', () => {
+            if (!gameRunning) {
+                gameRunning = true;
+                cancelAnimationFrame(animationFrameId);
+                gameLoop();
+                startButton.textContent = "일시정지";
+            } else {
+                gameRunning = false;
+                cancelAnimationFrame(animationFrameId);
+                startButton.textContent = "계속";
+            }
+        });
+
+        resetButton.addEventListener('click', () => {
+            gameRunning = false;
+            cancelAnimationFrame(animationFrameId);
+            initGame();
+            startButton.textContent = "시작";
+        });
+
+        window.addEventListener('resize', () => {
+            const wasRunning = gameRunning;
+            if (wasRunning) {
+                gameRunning = false;
+                cancelAnimationFrame(animationFrameId);
+            }
+            resizeCanvas(); // 리사이즈 시 요소 위치 유지하며 캔버스 크기만 조절
+            draw(); // 현재 상태 다시 그리기
+
+            if (wasRunning) {
+                gameRunning = true;
+                cancelAnimationFrame(animationFrameId); // 안전하게 이전 루프 취소
+                gameLoop();
+            }
+            startButton.textContent = wasRunning ? "일시정지" : "시작";
+        });
+
+        window.onload = function() {
+            initGame();
+            // 게임 설명 메시지 표시
+            showMessage("방향키 & WASD로 조작하세요!", 3000);
+        }
+    </script>
+
+</body>
+</html>
